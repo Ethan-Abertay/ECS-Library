@@ -100,10 +100,11 @@ public:
 	template <class ... T> void initComponents();
 	template<class ... T> void processSystems(float DeltaTime);
 
+	template<class ... T> void assignComps(EntityID ID);
 	template<class T> void assignComp(EntityID ID);
 	template<class T> void unassignComp(EntityID ID);
 
-	template<class... ComponentClasses> unique_ptr<vector<EntityID>> getEntitiesWithComponents();
+	template<class ... ComponentClasses> unique_ptr<vector<EntityID>> getEntitiesWithComponents();
 	template<class T> T* getEntitysComponent(EntityID entityID);
 
 
@@ -148,6 +149,12 @@ void ECS::assignComp(EntityID ID)
 	// Call default constructor to initialise variables
 	T* comp = getEntitysComponent<T>(ID);
 	*comp = T();
+}
+
+template<class ... T>
+void ECS::assignComps(EntityID ID)
+{
+	(assignComp<T>(ID), ...);
 }
 
 template<class T>
