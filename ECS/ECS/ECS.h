@@ -4,6 +4,7 @@
 #include <array>
 #include <bitset>
 #include <vector>
+#include <assert.h>
 
 using std::cout;
 using std::endl;
@@ -12,10 +13,10 @@ using std::bitset;
 using std::vector;
 using std::unique_ptr;
 
-#define MAX_ENTITIES 8
+#define MAX_ENTITIES 3000
 #define MAX_COMPONENTS 8
 
-typedef uint8_t EntityID;	// Works for 8 entities
+typedef uint16_t EntityID;	// Works for 65k entities
 typedef uint8_t CompID;		// Works for 8 components
 typedef uint8_t byte;		// Used for dynamic allocation of component pools
 typedef bitset<MAX_COMPONENTS> CompMask;	// Used to efficiently indicate component ownership of entities
@@ -53,15 +54,17 @@ namespace ecs
 {
 	struct EntityDesignation
 	{
-		EntityDesignation(EntityID ID_, CompMask mask_ = 0)
-		{
-			ID = ID_;
-			compMask = mask_;
-		}
 		EntityDesignation() {}
 
-		EntityID ID;
-		CompMask compMask;
+		//EntityDesignation(EntityID ID_, CompMask mask_ = 0)
+		////EntityDesignation(CompMask mask_ = 0)
+		//{
+		//	//ID = ID_;
+		//	compMask = mask_;
+		//}
+
+		//EntityID ID;
+		CompMask compMask = 0;
 	};
 
 	struct ComponentPool
@@ -93,7 +96,7 @@ public:
 	ECS();
 	~ECS();
 
-	EntityID createEntity();
+	template<class ... T> EntityID createEntity();
 
 	/* ----------------------- Public Functions Defined in Header----------------------- */
 
@@ -104,27 +107,50 @@ public:
 	template<class T> void assignComp(EntityID ID);
 	template<class T> void unassignComp(EntityID ID);
 
-	template<class ... ComponentClasses> unique_ptr<vector<EntityID>> getEntitiesWithComponents();
+	template<class ... ComponentClasses> unique_ptr<vector<EntityID>> getEntitiesWithComponents();	// This should only be use for nested looping as it may be faster than normal method
 	template<class T> T* getEntitysComponent(EntityID entityID);
+	// Inlining a parameter pack function may result in large function bodies which would hurt instruction cache?
+	// Not super sure since I imagine compilers would just loop in instruciton cache and you can't guarantee the compiler would inline this anyway. 
+	template<class ... T> inline CompMask getCompMask();	
 
+	// Getters
+	//array<ecs::EntityDesignation, MAX_ENTITIES>& getEntities() { return entities; };
+	EntityID getNoOfEntities() { return MAX_ENTITIES; };
+
+	inline bool entityHasComponents(const EntityID index, const CompMask compMask);
 
 protected:
 	// Entities
 	array<ecs::EntityDesignation, MAX_ENTITIES> entities;
-	EntityID noOfEntities = 0;
+	//EntityID noOfEntities = 0;
 
 	// Component Pools
 	vector<ecs::ComponentPool*> componentPools;	// Vector of pointers used because component pools can be very large and it's only set on init, then just read
 		
 	/* ----------------------- Protected Functions Defined in Header----------------------- */
-	template<class T> static CompID getCompID();
+	template<class T> static inline CompID getCompID();
 	template<class T> void createComp();
 };
 
-
-
-
 // Function templates called from outside this class cannot be defined in the cpp for some reason. 
+
+template <class ... T>
+EntityID ECS::createEntity()
+{
+	// For this implementation (1), dead entities can be anywhere so loop through and find one to place this new entity in
+	for (int i = 0; i < entities.size(); i++)
+	{
+		// If dead
+		if (entities[i].compMask == 0)
+		{
+			// Use this space
+			assignComps<T ...>(i);	// Assign components
+			return i;	// Return ID
+		}
+	}
+	assert(false);
+	return MAX_ENTITIES;	// Entity wasn't created, just return max
+}
 
 template <class ... T>
 void ECS::initComponents()
@@ -169,6 +195,7 @@ T* ECS::getEntitysComponent(EntityID entityID)
 	return static_cast<T*>(componentPools[(int)getCompID<T>()]->get(entityID));
 }
 
+// This should only be use for nested looping as it may be faster than normal method
 template<class... ComponentClasses>
 unique_ptr<vector<EntityID>> ECS::getEntitiesWithComponents()
 {
@@ -176,20 +203,29 @@ unique_ptr<vector<EntityID>> ECS::getEntitiesWithComponents()
 	unique_ptr<vector<EntityID>> output = std::make_unique<vector<EntityID>>();
 
 	// Get component masks
-	CompMask compMask;
-
-	// Unpack parameter pack
-	int compIDs[] = { getCompID<ComponentClasses>() ... };
-
-	// Fill component masks
-	for (int i = 0; i < sizeof...(ComponentClasses); i++)
-		compMask.set(compIDs[i]);
+	CompMask compMask = getCompMask<ComponentClasses ...>();
 
 	// Get entities with these compIDs
-	for (int i = 0; i < noOfEntities; i++)	// Loop through all entities
+	for (int i = 0; i < MAX_ENTITIES; i++)	// Loop through all entities
 		if ((entities[i].compMask & compMask) == compMask)	// If this entity has all components required
 			output->push_back(i);	// Add this entity's ID to the output
 
+	return output;
+}
+
+template<class ... T>
+CompMask ECS::getCompMask()
+{
+	CompMask output;
+
+	// Unpack parameter pack
+	int ids[] = { getCompID<T>() ... };
+
+	// Set the component mask bits
+	for (int i = 0; i < sizeof...(T); i++)
+		output.set(ids[i]);
+
+	// Return comp mask
 	return output;
 }
 
@@ -210,3 +246,9 @@ void ECS::createComp()
 	// This works as long as you create all component pools initially (don't get a comp's ID before creating it's pool or the indexes will mess up)
 	getCompID<T>();
 }
+
+bool ECS::entityHasComponents(const EntityID index, const CompMask compMask)
+{
+	return (entities[index].compMask & compMask) == compMask;
+}
+
