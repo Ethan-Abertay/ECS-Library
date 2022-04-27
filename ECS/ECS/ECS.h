@@ -1,5 +1,43 @@
 #pragma once
 
+/*
+	The intention of this system is to utilize preprocessor conditional inclusions.
+	By defining at compile time how you wish the ECS library to operate it will conditionally include different
+	pieces of source code to the compiler. 
+
+	This could be set by an external config header file which makes more sense as a library
+	but for now, there's no need to overcomplicate - I'll define the macros here
+
+	The following explains the options availble for alternative ECS implementations. 
+	There is a check (in the preprocessor) to ensure valid numbers are used. 
+
+	Implementations:
+		1 - no refactoring at all
+		2 - dead entities refactored
+		3 - Full refactor
+
+	Refactor Methods:
+		1 - component copying
+		2 - sparse set
+
+	And now I have this system, I can setup systems to automatically pick the most optimized unsigned integer type for the number of entities desired,
+	i.e. how many entities do you want this ECS to utilize:
+		1 - 256 entities (one byte)
+		2 - 65536 entities (two bytes)
+		3 - 4,294,967,296 entities (four bytes)
+*/
+// The implementation
+#define IMPL 1
+// The refactor method (only relevent if implementation uses it)
+#define REFAC 1
+// The number of entities 
+#define ECS_ENTITY_CONFIG 2
+
+// Ensure macros have valid integral numbers
+#if IMPL <= 0 || IMPL > 3 || REFAC <= 0 || REFAC > 2 || ECS_ENTITY_CONFIG <= 0 || ECS_ENTITY_CONFIG > 3
+#error invalid numbers used as macros (ECS.h)
+#endif
+
 #include <iostream>
 #include <array>
 #include <bitset>
@@ -13,13 +51,23 @@ using std::bitset;
 using std::vector;
 using std::unique_ptr;
 
-#define MAX_ENTITIES 3000
-#define MAX_COMPONENTS 8
+#if ECS_ENTITY_CONFIG == 1
+#define MAX_ENTITIES 256
+typedef uint8_t EntityID;
+#elif ECS_ENTITY_CONFIG == 2
+#define MAX_ENTITIES 65536
+typedef uint16_t EntityID;
+#elif ECS_ENTITY_CONFIG == 3
+#define MAX_ENTITIES 4294967296
+typedef uint32_t EntityID;
+#endif
 
-typedef uint16_t EntityID;	// Works for 65k entities
+// The max number of component types this ECS supports
+#define MAX_COMPONENTS 8
 typedef uint8_t CompID;		// Works for 8 components
-typedef uint8_t byte;		// Used for dynamic allocation of component pools
 typedef bitset<MAX_COMPONENTS> CompMask;	// Used to efficiently indicate component ownership of entities
+
+typedef uint8_t byte;		// Used for dynamic allocation of component pools
 
 // Extern variables
 extern CompID unsetComponentID;
@@ -115,18 +163,25 @@ public:
 
 	// Getters
 	//array<ecs::EntityDesignation, MAX_ENTITIES>& getEntities() { return entities; };
-	EntityID getNoOfEntities() { return MAX_ENTITIES; };
+
+#if IMPL == 1
+	// Implementation 1 requires you check the entire entity array because alive entities may be anywhere
+	EntityID getNoOfEntities() { return EntityID(-1); };	
+#elif IMPL == 2 || IMPL == 3
+	// Implementation 2 and 3 organize all alive entities to the begining of the array, thus return that number
+	EntityID getNoOfEntities() { return noOfEntities; };
+#endif
 
 	inline bool entityHasComponents(const EntityID index, const CompMask compMask);
 
 protected:
 	// Entities
 	array<ecs::EntityDesignation, MAX_ENTITIES> entities;
-	//EntityID noOfEntities = 0;
+	EntityID noOfEntities = 0;
 
 	// Component Pools
 	vector<ecs::ComponentPool*> componentPools;	// Vector of pointers used because component pools can be very large and it's only set on init, then just read
-		
+	
 	/* ----------------------- Protected Functions Defined in Header----------------------- */
 	template<class T> static inline CompID getCompID();
 	template<class T> void createComp();
@@ -137,6 +192,8 @@ protected:
 template <class ... T>
 EntityID ECS::createEntity()
 {
+
+#if IMPL == 1
 	// For this implementation (1), dead entities can be anywhere so loop through and find one to place this new entity in
 	for (int i = 0; i < entities.size(); i++)
 	{
@@ -145,11 +202,20 @@ EntityID ECS::createEntity()
 		{
 			// Use this space
 			assignComps<T ...>(i);	// Assign components
+			noOfEntities++;
 			return i;	// Return ID
 		}
 	}
+#elif IMPL == 2
+	// This implementation has all alive entities to the begining of the array, thus it can insert a new entity in constant time
+	const EntityID newID = noOfEntities++;	// Set to current value, then increment
+	assignComps<T ...>(newID);
+	return newID;
+#endif
+
+	// If any implementation failed, return this (and crash if debugging)
 	assert(false);
-	return MAX_ENTITIES;	// Entity wasn't created, just return max
+	return EntityID(-1);	// Entity wasn't created, just return max
 }
 
 template <class ... T>
@@ -206,7 +272,7 @@ unique_ptr<vector<EntityID>> ECS::getEntitiesWithComponents()
 	CompMask compMask = getCompMask<ComponentClasses ...>();
 
 	// Get entities with these compIDs
-	for (int i = 0; i < MAX_ENTITIES; i++)	// Loop through all entities
+	for (int i = 0; i < getNoOfEntities(); i++)	// Loop through entities (depends on implementation)
 		if ((entities[i].compMask & compMask) == compMask)	// If this entity has all components required
 			output->push_back(i);	// Add this entity's ID to the output
 
