@@ -133,6 +133,11 @@ namespace ecs
 			return data + index * elementSize;
 		}
 
+		inline void copy(size_t from, size_t to)
+		{
+			memcpy(data + to * elementSize, data + from * elementSize, elementSize);
+		}
+
 		byte* data = 0;
 		const size_t elementSize;
 	};
@@ -144,12 +149,14 @@ public:
 	ECS();
 	~ECS();
 
-	template<class ... T> EntityID createEntity();
 
 	/* ----------------------- Public Functions Defined in Header----------------------- */
+	template<class ... T> EntityID createEntity();
+	template<class ... T> void destroyEntity(EntityID id);
 
 	template <class ... T> void initComponents();
 	template<class ... T> void processSystems(float DeltaTime);
+	void transferComponents(EntityID from, EntityID to);
 
 	template<class ... T> void assignComps(EntityID ID);
 	template<class T> void assignComp(EntityID ID);
@@ -213,9 +220,32 @@ EntityID ECS::createEntity()
 	return newID;
 #endif
 
-	// If any implementation failed, return this (and crash if debugging)
+	// If any implementation failed, return -1 (and crash if debugging)
 	assert(false);
 	return EntityID(-1);	// Entity wasn't created, just return max
+}
+
+template<class ... T>
+void ECS::destroyEntity(EntityID id)
+{
+	// Decrement counter
+	noOfEntities--;
+
+	// Implementation 1 does nothing to the components in the component array as they are reset when they are assigned to an entity. 
+#if IMPL == 1
+	// Set entities comp mask to 0 (kills/destroys it)
+	entities[id].compMask = 0;
+#elif IMPL == 2
+	// This implementation must ensure all entities are at the beginning of the array. 
+	// Take the entity at the end of the array and slot it into the new available space
+	entities[id].compMask = entities[noOfEntities].compMask;
+
+	// Transfer component data from old to new entity (this is refactor implementation dependant also)
+	transferComponents(noOfEntities, id);
+
+	// Now kill the old entity
+	entities[noOfEntities].compMask = 0;
+#endif
 }
 
 template <class ... T>
