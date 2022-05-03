@@ -27,15 +27,15 @@
 		3 - 4,294,967,296 entities (four bytes)
 */
 // The implementation
-#define IMPL 1
+#define IMPL 2
 // The refactor method (only relevent if implementation uses it)
-#define REFAC 1
+#define REFAC 2
 // The number of entities 
 #define ECS_ENTITY_CONFIG 2
 
 // Ensure macros have valid integral numbers
 #if IMPL <= 0 || IMPL > 3 || REFAC <= 0 || REFAC > 2 || ECS_ENTITY_CONFIG <= 0 || ECS_ENTITY_CONFIG > 3
-#error invalid numbers used as macros (ECS.h)
+#error Invalid numbers used as macros (ECS.h)
 #endif
 
 #include <iostream>
@@ -172,11 +172,15 @@ public:
 	//array<ecs::EntityDesignation, MAX_ENTITIES>& getEntities() { return entities; };
 
 #if IMPL == 1
+
 	// Implementation 1 requires you check the entire entity array because alive entities may be anywhere
 	EntityID getNoOfEntities() { return EntityID(-1); };	
+
 #elif IMPL == 2 || IMPL == 3
+
 	// Implementation 2 and 3 organize all alive entities to the begining of the array, thus return that number
 	EntityID getNoOfEntities() { return noOfEntities; };
+
 #endif
 
 	inline bool entityHasComponents(const EntityID index, const CompMask compMask);
@@ -189,6 +193,23 @@ protected:
 	// Component Pools
 	vector<ecs::ComponentPool*> componentPools;	// Vector of pointers used because component pools can be very large and it's only set on init, then just read
 	
+#if REFAC == 2
+
+	// Sparse set linking entity ID to it's component ID rather than them being the same ID (allows for more efficient component movement in theory)
+	// The entity ID index has element which is the index to the component.
+	// The index of the vector returns the sparse set array of the component pool is the same index in the component pools. i.e. index 1 in the component pools has its sparse set in index 1 here. 
+	vector<array<EntityID, MAX_ENTITIES>*> componentSparseSets;
+
+	// Unfortunately, the sparse set method needs a way to know which components in the dense array aren't in use.
+	// I believe the best way to do this would be to create a dense bitset to use as a reference because it is memory efficient,
+	// and doesn't modify regular runtime performance of the components 
+
+	// A vector of bitsets corresponding to each component (dense) array. 
+	// If value is 1 at bit number n, then the component in the dense array at index n is currently in use by an entity
+	vector<bitset<MAX_ENTITIES>*> componentAvailabilityBitsets;	
+
+#endif
+
 	/* ----------------------- Protected Functions Defined in Header----------------------- */
 	template<class T> static inline CompID getCompID();
 	template<class T> void createComp();
@@ -214,10 +235,12 @@ EntityID ECS::createEntity()
 		}
 	}
 #elif IMPL == 2
+
 	// This implementation has all alive entities to the begining of the array, thus it can insert a new entity in constant time
 	const EntityID newID = noOfEntities++;	// Set to current value, then increment
 	assignComps<T ...>(newID);
 	return newID;
+
 #endif
 
 	// If any implementation failed, return -1 (and crash if debugging)
@@ -226,25 +249,56 @@ EntityID ECS::createEntity()
 }
 
 template<class ... T>
-void ECS::destroyEntity(EntityID id)
+void ECS::destroyEntity(EntityID entityID)
 {
+	auto finalizeDestruction = [&](EntityID index)
+	{
+
+#if REFAC == 2
+
+		// Free availability of this entity's components
+		// Loop through each possible component this entity could have
+		for (int i = 0; i < MAX_COMPONENTS; i++)
+		{
+			// NOTE, i is the compID which is deliberately fixed as such when the components were created with initComponents<>()
+
+			// Check entity has this component
+			if (!entities[index].compMask.test(i))
+				continue;
+
+			// Get component index that this 
+			auto compIndex = componentSparseSets[i]->at(index);
+
+			// Reset component availability bitset
+			componentAvailabilityBitsets[i]->reset(compIndex);
+		}
+
+#endif
+
+		// Set entity's comp mask to 0 (kills/destroys it)
+		entities[index].compMask = 0;
+	};
+
 	// Decrement counter
 	noOfEntities--;
 
 	// Implementation 1 does nothing to the components in the component array as they are reset when they are assigned to an entity. 
 #if IMPL == 1
-	// Set entities comp mask to 0 (kills/destroys it)
-	entities[id].compMask = 0;
+
+	finalizeDestruction(entityID);
+
 #elif IMPL == 2
+
 	// This implementation must ensure all entities are at the beginning of the array. 
 	// Take the entity at the end of the array and slot it into the new available space
-	entities[id].compMask = entities[noOfEntities].compMask;
+	entities[entityID].compMask = entities[noOfEntities].compMask;
 
 	// Transfer component data from old to new entity (this is refactor implementation dependant also)
-	transferComponents(noOfEntities, id);
+	transferComponents(noOfEntities, entityID);
 
 	// Now kill the old entity
-	entities[noOfEntities].compMask = 0;
+	finalizeDestruction(noOfEntities);
+
 #endif
 }
 
@@ -263,14 +317,50 @@ void ECS::processSystems(float DeltaTime)
 }
 
 template<class T>
-void ECS::assignComp(EntityID ID)
+void ECS::assignComp(EntityID entityID)
 {
 	// Set comp mask
-	entities[ID].compMask.set(getCompID<T>());
+	entities[entityID].compMask.set(getCompID<T>());
 
-	// Call default constructor to initialise variables
-	T* comp = getEntitysComponent<T>(ID);
+#if REFAC == 1
+
+	// This method just uses the same index as the entity, thus we can just initalize the component and be done. 
+
+#elif REFAC == 2
+
+	// This method utilizes the sparse set to get the component index from the entity index
+
+	// Get component ID (in the array of arrays (components) which array is our component?)
+	const auto compID = getCompID<T>();
+
+	// Get reference to the component availability bitset to find first available space
+	auto* availabilityBitset = componentAvailabilityBitsets[compID];
+
+	// Get reference to sparse set to assign the component to this entity
+	auto* sparseSet = componentSparseSets[compID];
+
+	// Find available spot (this is linear time and much slower than REFAC 1's constant time here)
+	for (int i = 0; i < MAX_ENTITIES; i++)
+	{
+		// If this sparse set has a vacanncy
+		if (!availabilityBitset->test(i))
+		{
+			// Set the bit
+			availabilityBitset->set(i);
+
+			// Assign component to entity in sparse set
+			(*sparseSet)[entityID] = i;
+
+			break;
+		}
+	}
+
+#endif
+
+	// Call default constructor to initialise variables in the component
+	T* comp = getEntitysComponent<T>(entityID);
 	*comp = T();
+
 }
 
 template<class ... T>
@@ -288,7 +378,19 @@ void ECS::unassignComp(EntityID ID)
 template<class T>
 T* ECS::getEntitysComponent(EntityID entityID)
 {
-	return static_cast<T*>(componentPools[(int)getCompID<T>()]->get(entityID));
+#if REFAC == 1
+
+	// Components are indexed in the component pool by the same index used to get the entity in the entity array (the entityID)
+	return static_cast<T*>(componentPools[getCompID<T>()]->get(entityID));
+
+#elif REFAC == 2
+
+	// There is now a sparse set inbetween the entity array and the component array. 
+	// To get the index to the component array the entityID is used in the sparse set, the element is the index in the component array
+	const EntityID compIndex = componentSparseSets[getCompID<T>()]->at(entityID);
+	return static_cast<T*>(componentPools[getCompID<T>()]->get(compIndex));
+
+#endif
 }
 
 // This should only be use for nested looping as it may be faster than normal method
@@ -341,6 +443,16 @@ void ECS::createComp()
 	// This set's the new component's ID which is the index to this pool in the vector of pools
 	// This works as long as you create all component pools initially (don't get a comp's ID before creating it's pool or the indexes will mess up)
 	getCompID<T>();
+
+#if REFAC == 2
+
+	// Setup sparse set
+	componentSparseSets.push_back(new array<EntityID, MAX_ENTITIES>());
+
+	// Create indicator bitset
+	componentAvailabilityBitsets.push_back(new bitset<MAX_ENTITIES>());	// They are automatically all set to 0	
+
+#endif
 }
 
 bool ECS::entityHasComponents(const EntityID index, const CompMask compMask)
