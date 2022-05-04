@@ -27,9 +27,9 @@
 		3 - 4,294,967,296 entities (four bytes)
 */
 // The implementation
-#define IMPL 2
+#define IMPL 3
 // The refactor method (only relevent if implementation uses it)
-#define REFAC 2
+#define REFAC 1
 // The number of entities 
 #define ECS_ENTITY_CONFIG 2
 
@@ -72,46 +72,38 @@ typedef uint8_t byte;		// Used for dynamic allocation of component pools
 // Extern variables
 extern CompID unsetComponentID;
 
-namespace math
-{
-	struct Vector2
-	{
-		Vector2() = default;
-		Vector2(float x_, float y_) { x = x_; y = y_; }
-
-		Vector2 operator* (float f)
-		{
-			Vector2 output = *this;
-			output.x *= f;
-			output.y *= f;
-			return output;
-		}
-
-		Vector2& operator+= (const Vector2 &rhs)
-		{
-			x += rhs.x;
-			y += rhs.y;
-			return *this;
-		}
-
-		float x = 0, y = 0;
-	};
-};
+//namespace math
+//{
+//	struct Vector2
+//	{
+//		Vector2() = default;
+//		Vector2(float x_, float y_) { x = x_; y = y_; }
+//
+//		Vector2 operator* (float f)
+//		{
+//			Vector2 output = *this;
+//			output.x *= f;
+//			output.y *= f;
+//			return output;
+//		}
+//
+//		Vector2& operator+= (const Vector2 &rhs)
+//		{
+//			x += rhs.x;
+//			y += rhs.y;
+//			return *this;
+//		}
+//
+//		float x = 0, y = 0;
+//	};
+//};
 
 namespace ecs
 {
 	struct EntityDesignation
 	{
-		EntityDesignation() {}
+		EntityDesignation() = default;
 
-		//EntityDesignation(EntityID ID_, CompMask mask_ = 0)
-		////EntityDesignation(CompMask mask_ = 0)
-		//{
-		//	//ID = ID_;
-		//	compMask = mask_;
-		//}
-
-		//EntityID ID;
 		CompMask compMask = 0;
 	};
 
@@ -138,9 +130,43 @@ namespace ecs
 			memcpy(data + to * elementSize, data + from * elementSize, elementSize);
 		}
 
+		inline void switch_ (size_t a, size_t b)
+		{
+			byte *b_data = new byte[elementSize];	// Get place to store b's new data
+			memcpy(b_data, get(a), elementSize);	// Store b's new data
+			copy(a, b);								// Copy data from a to b
+			memcpy(get(b), b_data, elementSize);	// Copy data from storage into b
+
+			// Free memory
+			delete[] b_data;
+		}
+
 		byte* data = 0;
 		const size_t elementSize;
 	};
+
+#if IMPL == 3
+
+	// The sorting group is used to sort an unordered entity array into known groups (EntityGroups)
+	struct SortingGroup
+	{
+		SortingGroup() = default;
+
+		vector<EntityID> indices;	// All indices of entities in the main entity array that have this comp mask
+		CompMask compMask = 0;		// The components used by this group
+	};
+
+	// The entity group is what is used to allow for more efficient looping and other benefits. 
+	struct EntityGroup
+	{
+		EntityGroup() = default;
+
+		EntityID startIndex = 0;	// The index (in main entity array) of the first entity in this group
+		EntityID noOfEntities = 0;	// The number of entities in this group
+		CompMask compMask = 0;		// The components used by this group
+	};
+
+#endif
 };
 
 class ECS
@@ -153,10 +179,12 @@ public:
 	/* ----------------------- Public Functions Defined in Header----------------------- */
 	template<class ... T> EntityID createEntity();
 	template<class ... T> void destroyEntity(EntityID id);
+	void switchEntities(EntityID a, EntityID b);
 
 	template <class ... T> void initComponents();
 	template<class ... T> void processSystems(float DeltaTime);
 	void transferComponents(EntityID from, EntityID to);
+	void switchComponents(EntityID a, EntityID b);
 
 	template<class ... T> void assignComps(EntityID ID);
 	template<class T> void assignComp(EntityID ID);
@@ -167,6 +195,12 @@ public:
 	// Inlining a parameter pack function may result in large function bodies which would hurt instruction cache?
 	// Not super sure since I imagine compilers would just loop in instruciton cache and you can't guarantee the compiler would inline this anyway. 
 	template<class ... T> inline CompMask getCompMask();	
+
+#if IMPL == 3
+
+	void performFullRefactor();
+
+#endif
 
 	// Getters
 	//array<ecs::EntityDesignation, MAX_ENTITIES>& getEntities() { return entities; };
@@ -210,6 +244,13 @@ protected:
 
 #endif
 
+#if IMPL == 3
+
+	vector<ecs::SortingGroup*> sortingGroups;
+	vector<ecs::EntityGroup*> entityGroups;
+
+#endif
+
 	/* ----------------------- Protected Functions Defined in Header----------------------- */
 	template<class T> static inline CompID getCompID();
 	template<class T> void createComp();
@@ -237,6 +278,13 @@ EntityID ECS::createEntity()
 #elif IMPL == 2
 
 	// This implementation has all alive entities to the begining of the array, thus it can insert a new entity in constant time
+	const EntityID newID = noOfEntities++;	// Set to current value, then increment
+	assignComps<T ...>(newID);
+	return newID;
+
+#elif IMPL == 3
+
+	// TEMP TEMP TEMP TEMP
 	const EntityID newID = noOfEntities++;	// Set to current value, then increment
 	assignComps<T ...>(newID);
 	return newID;
@@ -294,7 +342,17 @@ void ECS::destroyEntity(EntityID entityID)
 	entities[entityID].compMask = entities[noOfEntities].compMask;
 
 	// Transfer component data from old to new entity (this is refactor implementation dependant also)
+#if REFAC == 1
+
+	// This doesn't care about what happens to old component, it's automatically handled
 	transferComponents(noOfEntities, entityID);
+
+#elif REFAC == 2
+
+	// REFAC 2 needs the components to be switched in order to reset component availability bitsets
+	switchComponents(noOfEntities, entityID);
+
+#endif
 
 	// Now kill the old entity
 	finalizeDestruction(noOfEntities);
