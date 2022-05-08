@@ -1,5 +1,4 @@
 #include "ECS.h"
-#include <assert.h>
 #include <algorithm>	// Contains std::sort
 
 // Extern setting
@@ -71,10 +70,27 @@ void ECS::switchEntities(EntityID a, EntityID b)
 	entities[b].compMask = old;
 }
 
+// This transfer an entity from one place to another (implementation and refactor dependant)
+void ECS::transferEntity(EntityID from, EntityID to)
+{
+	if (from == to)
+		return;
+
+	// Transfer components
+	transferComponents(from, to);
+
+	// Set comp masks
+	entities[to].compMask = entities[from].compMask;
+	entities[from].compMask = 0;
+}
+
 // This Transfers all components from an entity to another and is optimized to ignore the old components
 // This is handy for whenever the old entity is about to be deleted etc (but is still implemmentation specific)
 void ECS::transferComponents(EntityID from, EntityID to)
 {
+	if (from == to)
+		return;
+
 	// Loop through each possible component this entity could have
 	for (int i = 0; i < MAX_COMPONENTS; i++)
 	{
@@ -138,14 +154,117 @@ void ECS::switchComponents(EntityID a, EntityID b)
 		// This method only requires the changing of an integer in each component sparse set
 		// The entityID has moved so we must tell it in the new sparse set location where it's component is (the old sparse set location's element)
 		// Switching both around allows the old component to be more easily freed for future used - rather than just setting the new sparse set value 
-		const auto old = componentSparseSets[i]->at(to);	// Save old component location
-		componentSparseSets[i]->at(to) = componentSparseSets[i]->at(from);	// Transfer new component location into place
-		componentSparseSets[i]->at(from) = old;		// Give this old entity the old (now redundant) component so it can be freed later
+		const auto old = componentSparseSets[i]->at(a);	// Save old component location
+		componentSparseSets[i]->at(a) = componentSparseSets[i]->at(b);	// Transfer new component location into place
+		componentSparseSets[i]->at(b) = old;		// Give this old entity the old (now redundant) component so it can be freed later
 
 		// The component availability flag is tied only to the dense component array which isn't changed here. 
 
 #endif
 	}
+}
+
+void ECS::destroyEntity(EntityID entityID)
+{
+	// Return if entity is already dead
+	if (entities[entityID].compMask == 0)
+		return;
+
+	auto finalizeDestruction = [&](EntityID index)
+	{
+
+#if REFAC == 2
+
+		// Free availability of this entity's components
+		// Loop through each possible component this entity could have
+		for (int i = 0; i < MAX_COMPONENTS; i++)
+		{
+			// NOTE, i is the compID which is deliberately fixed as such when the components were created with initComponents<>()
+
+			// Check entity has this component
+			if (!entities[index].compMask.test(i))
+				continue;
+
+			// Get component index that this entity uses O(1)
+			auto compIndex = componentSparseSets[i]->at(index);
+
+			// Reset component availability bitset O(1)
+			componentAvailabilityBitsets[i]->reset(compIndex);
+		}
+
+#endif
+
+		// Set entity's comp mask to 0 (kills/destroys it)
+		entities[index].compMask = 0;
+
+		// Update count
+		noOfEntities--;
+	};
+
+	// There is a function called switch entities but this doesn't care about the other entity so this is optimized
+	auto switchDeadEntity = [&](EntityID dead, EntityID alive)
+	{
+		entities[dead].compMask = entities[alive].compMask;
+
+		// Transfer component data from old to new entity (this is refactor implementation dependant also)
+#if REFAC == 1
+
+		// This doesn't care about what happens to old component, it's automatically handled
+		transferComponents(alive, dead);
+
+#elif REFAC == 2
+
+		// REFAC 2 needs the components to be switched in order to reset component availability bitsets
+		switchComponents(alive, dead);
+
+#endif
+	};
+
+	// Decrement counter
+	noOfEntities--;
+
+	// Implementation 1 does nothing to the components in the component array as they are reset when they are assigned to an entity. 
+#if IMPL == 1
+
+	finalizeDestruction(entityID);
+
+#elif IMPL == 2
+
+	// This implementation must ensure all entities are at the beginning of the array. 
+	// Take the entity at the end of the array and slot it into the new available space
+	switchDeadEntity(entityID, noOfEntities);
+
+	// Now kill the old entity
+	finalizeDestruction(noOfEntities);
+
+#elif IMPL == 3
+
+	// This implementation must ensure the entity group remains contiguous
+	// Move the last entity into the slot where the dead entity was and adjust entity group info accordingly
+
+	// Find dead entity's group
+	ecs::EntityGroup* group = 0;
+	for (int i = 0; i < entityGroups.size(); i++)
+	{
+		if (entityGroups[i]->compMask == entities[entityID].compMask)
+		{
+			group = entityGroups[i];
+			break;
+		}
+	}
+	assert(group);
+
+	// Up end entity into new place
+	const auto aliveIndex = group->getEndIndex();
+	switchDeadEntity(entityID, aliveIndex);
+
+	// Now kill the old entity
+	finalizeDestruction(aliveIndex);	// alive and dead have been switched 
+
+	// Update group size
+	group->noOfEntities--;
+
+#endif
 }
 
 #if IMPL == 3

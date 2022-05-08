@@ -36,6 +36,8 @@
 // Ensure macros have valid integral numbers
 #if IMPL <= 0 || IMPL > 3 || REFAC <= 0 || REFAC > 2 || ECS_ENTITY_CONFIG <= 0 || ECS_ENTITY_CONFIG > 3
 #error Invalid numbers used as macros (ECS.h)
+#elif IMPL == 1 && REFAC == 2
+#error Cannot use implementation 1 with sparse sets since implementation 1 doesnt refactor at all
 #endif
 
 #include <iostream>
@@ -161,6 +163,8 @@ namespace ecs
 	{
 		EntityGroup() = default;
 
+		inline EntityID getEndIndex() { return startIndex + noOfEntities - 1; }
+
 		EntityID startIndex = 0;	// The index (in main entity array) of the first entity in this group
 		EntityID noOfEntities = 0;	// The number of entities in this group
 		CompMask compMask = 0;		// The components used by this group
@@ -178,8 +182,10 @@ public:
 
 	/* ----------------------- Public Functions Defined in Header----------------------- */
 	template<class ... T> EntityID createEntity();
-	template<class ... T> void destroyEntity(EntityID id);
+	template<class ... T> EntityID init_CreateEntity();
+	void destroyEntity(EntityID id);
 	void switchEntities(EntityID a, EntityID b);
+	void transferEntity(EntityID from, EntityID to);
 
 	template <class ... T> void initComponents();
 	template<class ... T> void processSystems(float DeltaTime);
@@ -284,7 +290,116 @@ EntityID ECS::createEntity()
 
 #elif IMPL == 3
 
-	// TEMP TEMP TEMP TEMP
+	// This implementation needs to find the group of this entity (or create it if it doesn't exist)
+	// Then to append this entity onto the end. If there's no space it needs to move other entities. 
+
+	// Get comp mask of this new entity
+	const auto compMask = getCompMask<T ...>();
+
+	auto findGroup = [&](CompMask mask) -> ecs::EntityGroup*
+	{
+		for (auto* group : entityGroups)
+		{
+			if (group->compMask == mask)
+			{
+				return group;
+			}
+		}
+		return 0;
+	};
+
+	// Find group
+	ecs::EntityGroup* entityGroup = findGroup(compMask);
+
+	auto createNewGroup = [&]() -> EntityID
+	{
+		// Get the entity group at the end (of vector and entity array as well)
+		auto* previousGroup = entityGroups.back();
+
+		// Create entity group
+		auto* entityGroup = new ecs::EntityGroup();
+		entityGroup->startIndex = previousGroup->getEndIndex();			// Set starting point
+		entityGroup->compMask = compMask;				// Set comp mask
+		entityGroup->noOfEntities = 1;					// Set number of entities
+		entityGroups.push_back(entityGroup);			// Add entity group to the vector of groups
+
+		// Insert entity here
+		const EntityID newID = entityGroup->startIndex;	// Set to current value, then increment
+		assignComps<T ...>(newID);
+		return newID;
+	};
+
+	// This lambda has the trick to recursively call itself (pass itself in as a parameter)
+	auto moveEntityToEndOfGroup = [&](EntityID entityToMove, auto& moveEntityToEndOfGroup)
+	{
+		// If entity is dead, return
+		if (entities[entityToMove].compMask == 0)
+			return;
+
+		// Get group of this entity - Because it's not dead it should have a group
+		auto* group = findGroup(entities[entityToMove].compMask);
+		assert(group);
+
+		const auto newIndex = group->getEndIndex() + 1;
+
+		// See if there isn't a vacancy at the end of this group
+		if (entities[newIndex].compMask != 0)
+		{
+			// Move that entity out the way
+			moveEntityToEndOfGroup(newIndex, moveEntityToEndOfGroup);
+		}
+
+		// Transfer (not switch since it's only one alive entity) this entity to the vacany
+		transferEntity(entityToMove, newIndex);
+	};
+
+	auto insertEntityAtEndOfGroup = [&]() -> EntityID
+	{
+		// See if there isn't a vancancy at the end of this group
+		const auto newIndex = entityGroup->getEndIndex() + 1;
+		if (entities[newIndex].compMask != 0)
+		{
+			// There is not a vacancy, the entity that is in the way must be moved to the end of its group.
+			// If there is an entity in the way there just repeat until done
+			moveEntityToEndOfGroup(entityGroup->getEndIndex() + 1, moveEntityToEndOfGroup);
+		}
+
+		// There is now a vacancy
+
+		// Insert entity
+		assignComps<T ...>(newIndex);
+
+		// Update group info
+		entityGroup->noOfEntities++;
+
+		// Update global info
+		noOfEntities++;
+
+		return newIndex;
+	};
+
+	// If group hasn't been found then it doesn't exist and a new one needs to be created
+	if (!entityGroup)
+		return createNewGroup();
+	else
+		return insertEntityAtEndOfGroup();
+
+#endif
+
+	// If any implementation failed, return -1 (and crash if debugging)
+	assert(false);
+	return EntityID(-1);	// Entity wasn't created, just return max
+}
+
+// This is a function to create entities when first creating them on start up. 
+// It allows for more optimized creation
+template <class ... T>
+EntityID ECS::init_CreateEntity()
+{
+
+#if IMPL == 1 || IMPL == 2 || IMPL == 3
+
+	// These implementations have all alive entities to the begining of the array on initialization, thus it can insert a new entity in constant time
 	const EntityID newID = noOfEntities++;	// Set to current value, then increment
 	assignComps<T ...>(newID);
 	return newID;
@@ -294,70 +409,6 @@ EntityID ECS::createEntity()
 	// If any implementation failed, return -1 (and crash if debugging)
 	assert(false);
 	return EntityID(-1);	// Entity wasn't created, just return max
-}
-
-template<class ... T>
-void ECS::destroyEntity(EntityID entityID)
-{
-	auto finalizeDestruction = [&](EntityID index)
-	{
-
-#if REFAC == 2
-
-		// Free availability of this entity's components
-		// Loop through each possible component this entity could have
-		for (int i = 0; i < MAX_COMPONENTS; i++)
-		{
-			// NOTE, i is the compID which is deliberately fixed as such when the components were created with initComponents<>()
-
-			// Check entity has this component
-			if (!entities[index].compMask.test(i))
-				continue;
-
-			// Get component index that this 
-			auto compIndex = componentSparseSets[i]->at(index);
-
-			// Reset component availability bitset
-			componentAvailabilityBitsets[i]->reset(compIndex);
-		}
-
-#endif
-
-		// Set entity's comp mask to 0 (kills/destroys it)
-		entities[index].compMask = 0;
-	};
-
-	// Decrement counter
-	noOfEntities--;
-
-	// Implementation 1 does nothing to the components in the component array as they are reset when they are assigned to an entity. 
-#if IMPL == 1
-
-	finalizeDestruction(entityID);
-
-#elif IMPL == 2
-
-	// This implementation must ensure all entities are at the beginning of the array. 
-	// Take the entity at the end of the array and slot it into the new available space
-	entities[entityID].compMask = entities[noOfEntities].compMask;
-
-	// Transfer component data from old to new entity (this is refactor implementation dependant also)
-#if REFAC == 1
-
-	// This doesn't care about what happens to old component, it's automatically handled
-	transferComponents(noOfEntities, entityID);
-
-#elif REFAC == 2
-
-	// REFAC 2 needs the components to be switched in order to reset component availability bitsets
-	switchComponents(noOfEntities, entityID);
-
-#endif
-
-	// Now kill the old entity
-	finalizeDestruction(noOfEntities);
-
-#endif
 }
 
 template <class ... T>
