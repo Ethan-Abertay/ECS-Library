@@ -29,7 +29,7 @@
 // The implementation
 #define IMPL 2
 // The refactor method (only relevent if implementation uses it)
-#define REFAC 1
+#define REFAC 2
 // The number of entities 
 #define ECS_ENTITY_CONFIG 2
 
@@ -187,6 +187,7 @@ public:
 	void destroyEntity(EntityID id);
 	void switchEntities(EntityID a, EntityID b);
 	void transferEntity(EntityID from, EntityID to);
+	bool entityIsDead(EntityID id) { return entities[id].compMask == 0; };
 
 	template <class ... T> void initComponents();
 	template<class ... T> void processSystems(float DeltaTime);
@@ -517,10 +518,20 @@ unique_ptr<vector<EntityID>> ECS::getEntitiesWithComponents()
 	// Get component masks
 	CompMask compMask = getCompMask<ComponentClasses ...>();
 
+#if IMPL < 3
+
 	// Get entities with these compIDs
 	for (int i = 0; i < getNoOfEntities(); i++)	// Loop through entities (depends on implementation)
 		if ((entities[i].compMask & compMask) == compMask)	// If this entity has all components required
 			output->push_back(i);	// Add this entity's ID to the output
+
+#elif IMPL == 3
+
+	for (auto group : entityGroups)
+		for (int i = group->startIndex; i < group->getNextIndex(); i++)
+			output->push_back(i);
+
+#endif
 
 	return output;
 }
