@@ -196,9 +196,6 @@ void ECS::destroyEntity(EntityID entityID)
 
 		// Set entity's comp mask to 0 (kills/destroys it)
 		entities[index].compMask = 0;
-
-		// Update count
-		noOfEntities--;
 	};
 
 	// There is a function called switch entities but this doesn't care about the other entity so this is optimized

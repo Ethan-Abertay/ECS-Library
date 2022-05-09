@@ -27,7 +27,7 @@
 		3 - 4,294,967,296 entities (four bytes)
 */
 // The implementation
-#define IMPL 3
+#define IMPL 2
 // The refactor method (only relevent if implementation uses it)
 #define REFAC 1
 // The number of entities 
@@ -163,7 +163,8 @@ namespace ecs
 	{
 		EntityGroup() = default;
 
-		inline EntityID getEndIndex() { return startIndex + noOfEntities - 1; }
+		inline EntityID getEndIndex() { return startIndex + noOfEntities - (EntityID)1; }
+		inline EntityID getNextIndex() { return startIndex + noOfEntities; };
 
 		EntityID startIndex = 0;	// The index (in main entity array) of the first entity in this group
 		EntityID noOfEntities = 0;	// The number of entities in this group
@@ -205,6 +206,7 @@ public:
 #if IMPL == 3
 
 	void performFullRefactor();
+	vector<ecs::EntityGroup*>& getEntityGroups() { return entityGroups; };
 
 #endif
 
@@ -267,6 +269,9 @@ protected:
 template <class ... T>
 EntityID ECS::createEntity()
 {
+	// If there's no capability to spawn another entity
+	if (noOfEntities == EntityID(-1))
+		return -1;
 
 #if IMPL == 1
 	// For this implementation (1), dead entities can be anywhere so loop through and find one to place this new entity in
@@ -356,7 +361,7 @@ EntityID ECS::createEntity()
 	auto insertEntityAtEndOfGroup = [&]() -> EntityID
 	{
 		// See if there isn't a vancancy at the end of this group
-		const auto newIndex = entityGroup->getEndIndex() + 1;
+		const auto newIndex = entityGroup->getNextIndex();
 		if (entities[newIndex].compMask != 0)
 		{
 			// There is not a vacancy, the entity that is in the way must be moved to the end of its group.
