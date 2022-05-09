@@ -97,7 +97,7 @@ void ECS::transferComponents(EntityID from, EntityID to)
 		// NOTE, i is the compID which is deliberately fixed as such when the components were created with initComponents<>()
 
 		// Check component pool exists
-		if (componentPools.size() >= i)
+		if (i >= componentPools.size())
 			break;
 
 		// Check entity has this component
@@ -169,6 +169,8 @@ void ECS::destroyEntity(EntityID entityID)
 	// Return if entity is already dead
 	if (entities[entityID].compMask == 0)
 		return;
+
+	std::cout << "Destroyed one \n";
 
 	auto finalizeDestruction = [&](EntityID index)
 	{

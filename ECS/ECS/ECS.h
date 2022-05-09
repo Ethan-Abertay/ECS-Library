@@ -270,6 +270,8 @@ protected:
 template <class ... T>
 EntityID ECS::createEntity()
 {
+	std::cout << "Spawned one \n";
+
 	// If there's no capability to spawn another entity
 	if (noOfEntities == EntityID(-1))
 		return -1;
