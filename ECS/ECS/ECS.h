@@ -27,9 +27,9 @@
 		3 - 4,294,967,296 entities (four bytes)
 */
 // The implementation
-#define IMPL 2
+#define IMPL 1
 // The refactor method (only relevent if implementation uses it)
-#define REFAC 2
+#define REFAC 1
 // The number of entities 
 #define ECS_ENTITY_CONFIG 2
 
@@ -270,7 +270,7 @@ protected:
 template <class ... T>
 EntityID ECS::createEntity()
 {
-	std::cout << "Spawned one \n";
+	//std::cout << "Spawned one \n";
 
 	// If there's no capability to spawn another entity
 	if (noOfEntities == EntityID(-1))
@@ -326,7 +326,7 @@ EntityID ECS::createEntity()
 
 		// Create entity group
 		auto* entityGroup = new ecs::EntityGroup();
-		entityGroup->startIndex = previousGroup->getEndIndex();			// Set starting point
+		entityGroup->startIndex = previousGroup->getNextIndex();			// Set starting point
 		entityGroup->compMask = compMask;				// Set comp mask
 		entityGroup->noOfEntities = 1;					// Set number of entities
 		entityGroups.push_back(entityGroup);			// Add entity group to the vector of groups
@@ -345,10 +345,13 @@ EntityID ECS::createEntity()
 			return;
 
 		// Get group of this entity - Because it's not dead it should have a group
-		auto* group = findGroup(entities[entityToMove].compMask);
+		ecs::EntityGroup* group = findGroup(entities[entityToMove].compMask);
 		assert(group);
 
-		const auto newIndex = group->getEndIndex() + 1;
+		// Get the end index, where we want to move this entity (at the front) to.
+		const auto newIndex = group->getNextIndex();
+
+		//std::cout << "Next Index: " << (int)newIndex << '\n';
 
 		// See if there isn't a vacancy at the end of this group
 		if (entities[newIndex].compMask != 0)
@@ -359,6 +362,9 @@ EntityID ECS::createEntity()
 
 		// Transfer (not switch since it's only one alive entity) this entity to the vacany
 		transferEntity(entityToMove, newIndex);
+
+		// Update group
+		group->startIndex++;
 	};
 
 	auto insertEntityAtEndOfGroup = [&]() -> EntityID
@@ -369,7 +375,7 @@ EntityID ECS::createEntity()
 		{
 			// There is not a vacancy, the entity that is in the way must be moved to the end of its group.
 			// If there is an entity in the way there just repeat until done
-			moveEntityToEndOfGroup(entityGroup->getEndIndex() + 1, moveEntityToEndOfGroup);
+			moveEntityToEndOfGroup(entityGroup->getNextIndex(), moveEntityToEndOfGroup);
 		}
 
 		// There is now a vacancy

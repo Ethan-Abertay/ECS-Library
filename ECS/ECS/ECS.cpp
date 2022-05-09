@@ -136,7 +136,7 @@ void ECS::switchComponents(EntityID a, EntityID b)
 		// NOTE, i is the compID which is deliberately fixed as such when the components were created with initComponents<>()
 
 		// Check component pool exists
-		if (componentPools.size() >= i)
+		if (i >= componentPools.size())
 			break;
 
 		//// Check entity has this component
@@ -170,7 +170,7 @@ void ECS::destroyEntity(EntityID entityID)
 	if (entities[entityID].compMask == 0)
 		return;
 
-	std::cout << "Destroyed one \n";
+	//std::cout << "Destroyed one \n";
 
 	auto finalizeDestruction = [&](EntityID index)
 	{
@@ -345,7 +345,7 @@ void ECS::performFullRefactor()
 		// Get starting index for this entity group
 		EntityID startingIndex = 0;
 		if (i != 0)
-			startingIndex = entityGroups[i - 1]->startIndex + entityGroups[i-1]->noOfEntities;	// Next group starts right at the end of previous group
+			startingIndex = entityGroups[i - 1]->getNextIndex();	// Next group starts right at the end of previous group
 
 		// Create entity group for this sorting group
 		auto* entityGroup = new ecs::EntityGroup();
